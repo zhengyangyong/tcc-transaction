@@ -1,30 +1,46 @@
 package org.mengyun.tcctransaction;
 
-import org.apache.log4j.Logger;
 import org.mengyun.tcctransaction.api.TransactionContext;
 import org.mengyun.tcctransaction.api.TransactionStatus;
 import org.mengyun.tcctransaction.common.TransactionType;
+import org.mengyun.tcctransaction.repository.TransactionRepository;
+import org.slf4j.LoggerFactory;
 
 import java.util.Deque;
 import java.util.LinkedList;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Created by changmingxie on 10/26/15.
  */
 public class TransactionManager {
 
-    static final Logger logger = Logger.getLogger(TransactionManager.class.getSimpleName());
-
-    private TransactionRepository transactionRepository;
-
+    static final org.slf4j.Logger logger = LoggerFactory.getLogger(TransactionManager.class.getSimpleName());
     private static final ThreadLocal<Deque<Transaction>> CURRENT = new ThreadLocal<Deque<Transaction>>();
+    private TransactionRepository transactionRepository;
+    private ExecutorService executorService = null;
+
+    public TransactionManager() {
+
+
+    }
 
     public void setTransactionRepository(TransactionRepository transactionRepository) {
         this.transactionRepository = transactionRepository;
     }
 
-    public Transaction begin() {
+    public void setExecutorService(ExecutorService executorService) {
+        this.executorService = executorService;
+    }
 
+    public Transaction begin(Object uniqueIdentify) {
+        Transaction transaction = new Transaction(uniqueIdentify, TransactionType.ROOT);
+        transactionRepository.create(transaction);
+        registerTransaction(transaction);
+        return transaction;
+    }
+
+    public Transaction begin() {
         Transaction transaction = new Transaction(TransactionType.ROOT);
         transactionRepository.create(transaction);
         registerTransaction(transaction);
@@ -52,20 +68,79 @@ public class TransactionManager {
         }
     }
 
-    public void commit() {
+    public void commit(boolean asyncCommit) {
 
-        Transaction transaction = getCurrentTransaction();
+        final Transaction transaction = getCurrentTransaction();
 
         transaction.changeStatus(TransactionStatus.CONFIRMING);
 
         transactionRepository.update(transaction);
 
+        if (asyncCommit) {
+            try {
+                Long statTime = System.currentTimeMillis();
+
+                executorService.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        commitTransaction(transaction);
+                    }
+                });
+                logger.debug("async submit cost time:" + (System.currentTimeMillis() - statTime));
+            } catch (Throwable commitException) {
+                logger.warn("compensable transaction async submit confirm failed, recovery job will try to confirm later.", commitException.getCause());
+                //throw new ConfirmingException(commitException);
+            }
+        } else {
+            commitTransaction(transaction);
+        }
+    }
+
+
+    public void rollback(boolean asyncRollback) {
+
+        final Transaction transaction = getCurrentTransaction();
+        transaction.changeStatus(TransactionStatus.CANCELLING);
+
+        transactionRepository.update(transaction);
+
+        if (asyncRollback) {
+
+            try {
+                executorService.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        rollbackTransaction(transaction);
+                    }
+                });
+            } catch (Throwable rollbackException) {
+                logger.warn("compensable transaction async rollback failed, recovery job will try to rollback later.", rollbackException);
+                throw new CancellingException(rollbackException);
+            }
+        } else {
+
+            rollbackTransaction(transaction);
+        }
+    }
+
+
+    private void commitTransaction(Transaction transaction) {
         try {
             transaction.commit();
             transactionRepository.delete(transaction);
         } catch (Throwable commitException) {
-            logger.error("compensable transaction confirm failed.", commitException);
+            logger.warn("compensable transaction confirm failed, recovery job will try to confirm later.", commitException);
             throw new ConfirmingException(commitException);
+        }
+    }
+
+    private void rollbackTransaction(Transaction transaction) {
+        try {
+            transaction.rollback();
+            transactionRepository.delete(transaction);
+        } catch (Throwable rollbackException) {
+            logger.warn("compensable transaction rollback failed, recovery job will try to rollback later.", rollbackException);
+            throw new CancellingException(rollbackException);
         }
     }
 
@@ -81,21 +156,6 @@ public class TransactionManager {
         return transactions != null && !transactions.isEmpty();
     }
 
-    public void rollback() {
-
-        Transaction transaction = getCurrentTransaction();
-        transaction.changeStatus(TransactionStatus.CANCELLING);
-
-        transactionRepository.update(transaction);
-
-        try {
-            transaction.rollback();
-            transactionRepository.delete(transaction);
-        } catch (Throwable rollbackException) {
-            logger.error("compensable transaction rollback failed.", rollbackException);
-            throw new CancellingException(rollbackException);
-        }
-    }
 
     private void registerTransaction(Transaction transaction) {
 
@@ -111,12 +171,14 @@ public class TransactionManager {
             Transaction currentTransaction = getCurrentTransaction();
             if (currentTransaction == transaction) {
                 CURRENT.get().pop();
+                if (CURRENT.get().size() == 0) {
+                    CURRENT.remove();
+                }
             } else {
                 throw new SystemException("Illegal transaction when clean after completion");
             }
         }
     }
-
 
     public void enlistParticipant(Participant participant) {
         Transaction transaction = this.getCurrentTransaction();

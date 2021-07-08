@@ -25,28 +25,30 @@ public class TransactionContext implements Serializable {
         this.status = status;
     }
 
-    public void setXid(TransactionXid xid) {
-        this.xid = xid;
-    }
-
     public TransactionXid getXid() {
         return xid.clone();
     }
 
-    public void setAttachments(Map<String, String> attachments) {
-        this.attachments = attachments;
+    public void setXid(TransactionXid xid) {
+        this.xid = xid;
     }
 
     public Map<String, String> getAttachments() {
         return attachments;
     }
 
-    public void setStatus(int status) {
-        this.status = status;
+    public void setAttachments(Map<String, String> attachments) {
+        if (attachments != null && !attachments.isEmpty()) {
+            this.attachments.putAll(attachments);
+        }
     }
 
     public int getStatus() {
         return status;
+    }
+
+    public void setStatus(int status) {
+        this.status = status;
     }
 
 

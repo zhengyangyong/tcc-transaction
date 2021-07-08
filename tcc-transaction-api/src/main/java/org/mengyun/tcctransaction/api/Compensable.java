@@ -21,6 +21,12 @@ public @interface Compensable {
 
     public Class<? extends TransactionContextEditor> transactionContextEditor() default DefaultTransactionContextEditor.class;
 
+    public Class<? extends Exception>[] delayCancelExceptions() default {};
+
+    public boolean asyncConfirm() default false;
+
+    public boolean asyncCancel() default false;
+
     class NullableTransactionContextEditor implements TransactionContextEditor {
 
         @Override
@@ -35,26 +41,6 @@ public @interface Compensable {
     }
 
     class DefaultTransactionContextEditor implements TransactionContextEditor {
-
-        @Override
-        public TransactionContext get(Object target, Method method, Object[] args) {
-            int position = getTransactionContextParamPosition(method.getParameterTypes());
-
-            if (position >= 0) {
-                return (TransactionContext) args[position];
-            }
-
-            return null;
-        }
-
-        @Override
-        public void set(TransactionContext transactionContext, Object target, Method method, Object[] args) {
-
-            int position = getTransactionContextParamPosition(method.getParameterTypes());
-            if (position >= 0) {
-                args[position] = transactionContext;
-            }
-        }
 
         public static int getTransactionContextParamPosition(Class<?>[] parameterTypes) {
 
@@ -81,6 +67,26 @@ public @interface Compensable {
             }
 
             return transactionContext;
+        }
+
+        @Override
+        public TransactionContext get(Object target, Method method, Object[] args) {
+            int position = getTransactionContextParamPosition(method.getParameterTypes());
+
+            if (position >= 0) {
+                return (TransactionContext) args[position];
+            }
+
+            return null;
+        }
+
+        @Override
+        public void set(TransactionContext transactionContext, Object target, Method method, Object[] args) {
+
+            int position = getTransactionContextParamPosition(method.getParameterTypes());
+            if (position >= 0) {
+                args[position] = transactionContext;
+            }
         }
     }
 }
